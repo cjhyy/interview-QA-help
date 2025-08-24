@@ -1,123 +1,29 @@
-const { ChatOpenAI } = require('@langchain/openai');
-const { PromptTemplate } = require('@langchain/core/prompts');
-const { LLMChain } = require('langchain/chains');
 const { RecursiveCharacterTextSplitter } = require('langchain/text_splitter');
 const axios = require('axios');
+const AIFactory = require('./ai/aiFactory');
+const QAGenerator = require('./ai/qaGenerator');
+const { AI_CONFIG, TEXT_LIMITS } = require('../constants');
 
 class AISummarizer {
   constructor() {
-    // 检查可用的AI服务
-    this.useZhipu = !process.env.OPENAI_API_KEY || process.env.OPENAI_API_KEY === 'your_openai_api_key_here';
-    
-    if (this.useZhipu && process.env.ZHIPU_API_KEY) {
-      // 使用智谱AI
-      this.zhipuApiKey = process.env.ZHIPU_API_KEY;
-      this.zhipuModel = process.env.ZHIPU_MODEL || 'glm-4';
-      console.log('🤖 使用智谱AI进行内容总结');
-    } else if (process.env.OPENAI_API_KEY && process.env.OPENAI_API_KEY !== 'your_openai_api_key_here') {
-      // 使用OpenAI
-      this.model = new ChatOpenAI({
-        openAIApiKey: process.env.OPENAI_API_KEY,
-        modelName: process.env.AI_MODEL || 'gpt-3.5-turbo',
-        temperature: 0.3,
-        maxTokens: 1000,
-        timeout: 60000 // 60秒超时
-      });
-      this.useZhipu = false;
-      console.log('🤖 使用OpenAI进行内容总结');
-    } else {
-      console.error('❌ 未配置有效的AI服务密钥');
-    }
-
     // 文本分割器
     this.textSplitter = new RecursiveCharacterTextSplitter({
-      chunkSize: 3000,
-      chunkOverlap: 200,
+      chunkSize: TEXT_LIMITS?.CHUNK_SIZE || 3000,
+      chunkOverlap: TEXT_LIMITS?.CHUNK_OVERLAP || 200,
       separators: ['\n\n', '\n', '。', '！', '？', '.', '!', '?', ' ', '']
     });
+    
+    this.aiFactory = new AIFactory();
+    this.qaGenerator = new QAGenerator(this.aiFactory);
+    
+    console.log('✅ AISummarizer初始化成功');
 
-    // 总结提示模板
-    this.summaryPrompt = PromptTemplate.fromTemplate(`
-请对以下网页内容进行智能总结，要求：
 
-1. 提取核心观点和主要信息
-2. 保持逻辑清晰，结构合理
-3. 总结长度控制在200-500字之间
-4. 使用简洁明了的语言
-5. 如果是技术文章，请突出技术要点
-6. 如果是新闻资讯，请突出关键事实
 
-网页标题：{title}
 
-网页内容：
-{content}
-
-请提供高质量的总结：`);
-
-    // 关键词提取提示模板
-    this.keywordsPrompt = PromptTemplate.fromTemplate(`
-请从以下内容中提取5-8个最重要的关键词，要求：
-
-1. 关键词应该能够代表内容的核心主题
-2. 优先选择专业术语和重要概念
-3. 用逗号分隔关键词
-4. 只返回关键词，不要其他解释
-
-内容：{content}
-
-关键词：`);
-
-    // 分类提示模板
-    this.categoryPrompt = PromptTemplate.fromTemplate(`
-请将以下内容分类到最合适的类别中，只能选择以下类别之一：
-技术、新闻、教育、娱乐、商业、科学、其他
-
-内容标题：{title}
-内容摘要：{summary}
-
-请只返回类别名称，不要其他内容：`);
   }
 
-  /**
-   * 调用智谱AI API
-   * @param {string} prompt 
-   * @param {Object} options - 配置选项
-   * @param {number} options.maxTokens - 最大token数
-   * @returns {Promise<string>}
-   */
-  async callZhipuAI(prompt, options = {}) {
-    try {
-      // 动态设置max_tokens，默认2000，最大4000
-      const maxTokens = options.maxTokens || 2000;
-      const finalMaxTokens = Math.min(maxTokens, 4000);
-      
-      const requestData = {
-        model: this.zhipuModel,
-        messages: [
-          {
-            role: 'user',
-            content: prompt
-          }
-        ],
-        temperature: 0.3,
-        max_tokens: finalMaxTokens
-      };
-      
-      const requestConfig = {
-        headers: {
-          'Authorization': `Bearer ${this.zhipuApiKey}`,
-          'Content-Type': 'application/json'
-        },
-        timeout: 90000
-      };
-      
-      const response = await axios.post('https://open.bigmodel.cn/api/paas/v4/chat/completions', requestData, requestConfig);
-      return response.data.choices[0].message.content.trim();
-    } catch (error) {
-      console.error('❌ 智谱AI调用失败:', error.message);
-      throw new Error(`智谱AI调用失败: ${error.message}`);
-    }
-  }
+
 
 
 
@@ -204,7 +110,7 @@ JSON格式：
         
 //         const chain = new LLMChain({
 //           llm: this.model,
-//           prompt: PromptTemplate.fromTemplate(prompt)
+
 //         });
         
 //         const result = await chain.call({});
@@ -539,29 +445,11 @@ JSON格式：
     try {
       console.log('🤖 开始生成AI总结...');
       
-      // 生成问答列表
-      const qaList = await this.generateInterviewQA(title, content);
+      // 使用QA生成器生成问答
+      const result = await this.qaGenerator.generateQA(content, { title, summaryId, urlHash });
       
-      console.log(`✅ 生成了 ${qaList.length} 个问答`);
-      
-      // 存储问答到数据库
-      const interviewSummaryIds = await this.saveQAToDatabase(qaList, summaryId, urlHash);
-      
-      // 生成markdown格式的总结
-      const markdownSummary = this.generateMarkdownSummary(qaList);
-      
-      // 评估问答质量
-      const qualityScore = this.evaluateQuality(qaList);
-      
-      return {
-        success: true,
-        summary: markdownSummary,
-        qaList: qaList,
-        interviewSummaryIds: interviewSummaryIds,
-        qaCount: qaList.length,
-        qualityScore: qualityScore,
-        timestamp: new Date().toISOString()
-      };
+      console.log(`✅ 总结完成，生成 ${result.qaCount} 个问答，质量分数: ${result.qualityScore}`);
+      return result;
       
     } catch (error) {
       console.error('❌ 生成AI总结失败:', error.message);
@@ -940,4 +828,4 @@ ${validCategories.join('、')}
   }
 }
 
-module.exports = new AISummarizer();
+module.exports = AISummarizer;

@@ -259,4 +259,4 @@ class WebScraper {
   }
 }
 
-module.exports = new WebScraper();
+module.exports = WebScraper;

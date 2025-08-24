@@ -16,6 +16,7 @@ connectDB();
 
 // 导入路由
 const summaryRoutes = require('./routes/summary');
+const { errorHandler, notFound } = require('./middleware/errorHandler');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -77,25 +78,10 @@ app.get('/health', (req, res) => {
 });
 
 // 404处理
-app.use('*', (req, res) => {
-  res.status(404).json({
-    error: '接口不存在',
-    path: req.originalUrl
-  });
-});
+app.use(notFound);
 
-// 全局错误处理
-app.use((err, req, res, next) => {
-  console.error('Error:', err);
-  
-  // 开发环境显示详细错误信息
-  const isDevelopment = process.env.NODE_ENV === 'development';
-  
-  res.status(err.status || 500).json({
-    error: err.message || '服务器内部错误',
-    ...(isDevelopment && { stack: err.stack })
-  });
-});
+// 错误处理中间件
+app.use(errorHandler);
 
 // 启动服务器
 app.listen(PORT, () => {

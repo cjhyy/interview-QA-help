@@ -59,9 +59,10 @@ const summarySchema = new mongoose.Schema({
   },
   
   
-  // 总结质量评分（1-5）
+  // 总结质量评分（0-5）
   qualityScore: {
     type: Number,
+    min: 0,
     max: 5,
     default: 3
   },
